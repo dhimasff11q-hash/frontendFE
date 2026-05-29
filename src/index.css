@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #1a5490;
+  --color-secondary: #2c3e50;
+  --color-bgBlue: #3498db;
+  --color-lightGray: #ecf0f1;
+  --color-darkGray: #7f8c8d;
+  --color-sidebarBlue: #2C74B3;
+  --color-activeBlue: #3b82f6;
+  --color-borderBlue: #60a5fa;
+  --color-paymentBlue: #3b82c4;
+  --color-darkPaymentBlue: #1c557d;
+  
+  --animate-slide-in-right: slide-in-right 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
+      opacity: 0.8;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--color-bgBlue);
+  min-height: 100vh;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
