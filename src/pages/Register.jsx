@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getUsers, setCurrentUser } from '../services/mockDb';
+import { register } from '../services/apiService';
 
 const Register = () => {
   const navigate = useNavigate();
@@ -11,6 +11,7 @@ const Register = () => {
     confirmPassword: ''
   });
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleChange = (e) => {
     setFormData({
@@ -20,37 +21,25 @@ const Register = () => {
     setError('');
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
 
     if (formData.password !== formData.confirmPassword) {
       setError('Password dan Konfirmasi Password tidak cocok!');
       return;
     }
 
-    const users = getUsers();
-    const emailExists = users.some(u => u.email.toLowerCase() === formData.email.toLowerCase());
-    if (emailExists) {
-      setError('Email sudah terdaftar!');
-      return;
+    setIsLoading(true);
+
+    try {
+      await register(formData.name, formData.email, formData.password);
+      navigate('/dashboard');
+    } catch (err) {
+      setError(err.message || 'Pendaftaran gagal!');
+    } finally {
+      setIsLoading(false);
     }
-
-    // Buat user baru
-    const newUser = {
-      id: Date.now(), // Unique ID
-      name: formData.name,
-      email: formData.email,
-      password: formData.password,
-      role: 'worker', // Default role worker
-      isActive: true
-    };
-
-    const updatedUsers = [...users, newUser];
-    localStorage.setItem('sif_users', JSON.stringify(updatedUsers));
-    
-    // Auto-login
-    setCurrentUser(newUser);
-    navigate('/dashboard');
   };
 
   return (
@@ -117,8 +106,8 @@ const Register = () => {
             />
           </div>
 
-          <button type="submit" className="bg-primary text-white border-none p-3 rounded-lg text-base font-bold cursor-pointer mt-2.5 hover:opacity-90 transition-opacity">
-            REGISTER
+          <button type="submit" disabled={isLoading} className="bg-primary text-white border-none p-3 rounded-lg text-base font-bold cursor-pointer mt-2.5 hover:opacity-90 transition-opacity disabled:opacity-50">
+            {isLoading ? 'REGISTERING...' : 'REGISTER'}
           </button>
         </form>
 

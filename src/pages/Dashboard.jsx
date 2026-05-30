@@ -3,16 +3,21 @@ import Navbar from '../components/Navbar';
 import Sidebar from '../components/Sidebar';
 import ProjectSidebar from '../components/ProjectSidebar';
 import TableList from '../components/TableList';
-import { 
-  getProjects, 
-  saveProjects, 
-  getInvoices, 
-  saveInvoices, 
-  getFeedbacks, 
-  saveFeedbacks, 
-  getWorkers, 
-  getCurrentUser 
-} from '../services/mockDb';
+import ModalNotification from '../components/ModalNotification';
+import {
+  getCurrentUser,
+  getProjects as getProjectsAPI,
+  getInvoices as getInvoicesAPI,
+  getFeedbacks as getFeedbacksAPI,
+  getWorkers as getWorkersAPI,
+  logout as logoutAPI,
+  createInvoice as createInvoiceAPI,
+  payInvoice as payInvoiceAPI,
+  deleteInvoice as deleteInvoiceAPI,
+  createFeedback as createFeedbackAPI,
+  resolveFeedback as resolveFeedbackAPI,
+  updateTaskField as updateTaskFieldAPI
+} from '../services/apiService';
 
 const Dashboard = () => {
   const currentUser = getCurrentUser();
@@ -21,56 +26,163 @@ const Dashboard = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeMenu, setActiveMenu] = useState('dashboard');
   const [activeRevisionTask, setActiveRevisionTask] = useState(null);
+  const [isSavingRevision, setIsSavingRevision] = useState(false);
   
   // Master States
   const [projects, setProjects] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [feedbacks, setFeedbacks] = useState([]);
   const [workers, setWorkers] = useState([]);
+  
+  // Paginated Projects State
+  const [paginatedProjectsData, setPaginatedProjectsData] = useState({
+    data: [],
+    currentPage: 1,
+    lastPage: 1,
+    total: 0
+  });
 
-  // Load data from mock DB on mount
+  // Modal Notification state
+  const [notification, setNotification] = useState({
+    isOpen: false,
+    type: 'success',
+    title: '',
+    message: '',
+    onConfirm: null,
+    confirmText: 'Ya, Lanjutkan',
+    cancelText: 'Batal'
+  });
+
+  const showNotification = (message, type = 'success', title = '', onConfirm = null, confirmText = 'Ya, Lanjutkan', cancelText = 'Batal') => {
+    setNotification({
+      isOpen: true,
+      type,
+      title: title || (type === 'success' ? 'Berhasil' : type === 'error' ? 'Gagal' : type === 'confirm' ? 'Konfirmasi' : 'Perhatian'),
+      message,
+      onConfirm,
+      confirmText,
+      cancelText
+    });
+  };
+
+  const closeNotification = () => {
+    setNotification(prev => ({ ...prev, isOpen: false }));
+  };
+
+  // Helper untuk me-refresh seluruh data dari API
+  const refreshAllData = async () => {
+    try {
+      const currentPage = paginatedProjectsData.currentPage || 1;
+      const [allProj, invData, fbData, paginatedProj] = await Promise.all([
+        getProjectsAPI(null, false),
+        getInvoicesAPI(),
+        getFeedbacksAPI(),
+        getProjectsAPI(currentPage, true)
+      ]);
+      setProjects(allProj);
+      setInvoices(invData);
+      setFeedbacks(fbData);
+      setPaginatedProjectsData(paginatedProj);
+    } catch (err) {
+      console.error('Error refreshing data from API:', err);
+    }
+  };
+
+  // Memuat data dari backend API saat komponen dipasang
   useEffect(() => {
-    setProjects(getProjects());
-    setInvoices(getInvoices());
-    setFeedbacks(getFeedbacks());
-    setWorkers(getWorkers());
+    const loadData = async () => {
+      try {
+        const promises = [
+          getProjectsAPI(null, false),
+          getInvoicesAPI(),
+          getFeedbacksAPI(),
+          getProjectsAPI(1, true)
+        ];
+        
+        if (currentUser?.role === 'admin') {
+          promises.push(getWorkersAPI());
+        }
+        
+        const results = await Promise.all(promises);
+        
+        setProjects(results[0]);
+        setInvoices(results[1]);
+        setFeedbacks(results[2]);
+        setPaginatedProjectsData(results[3]);
+        
+        if (currentUser?.role === 'admin') {
+          setWorkers(results[4]);
+        }
+      } catch (err) {
+        console.error('Error loading data from API:', err);
+      }
+    };
+    loadData();
   }, []);
 
+  const handlePageChange = async (page) => {
+    try {
+      const paginatedProj = await getProjectsAPI(page, true);
+      setPaginatedProjectsData(paginatedProj);
+    } catch (err) {
+      showNotification('Gagal memuat halaman: ' + err.message, 'error');
+    }
+  };
+
   // Sync state helpers
-  const updateProjectsState = (newProjects) => {
+  const updateProjectsState = async (newProjects) => {
     setProjects(newProjects);
-    saveProjects(newProjects);
+    try {
+      const paginatedProj = await getProjectsAPI(paginatedProjectsData.currentPage, true);
+      setPaginatedProjectsData(paginatedProj);
+    } catch (err) {
+      console.error('Error updating paginated projects:', err);
+    }
   };
 
   const updateInvoicesState = (newInvoices) => {
     setInvoices(newInvoices);
-    saveInvoices(newInvoices);
   };
 
   const updateFeedbacksState = (newFeedbacks) => {
     setFeedbacks(newFeedbacks);
-    saveFeedbacks(newFeedbacks);
   };
 
-  const handleUpdateRevisionDetail = (taskId, projectId, text) => {
-    const updatedProjects = projects.map(project => {
-      if (project.id === projectId) {
-        const updatedTasks = project.tasks.map(task => {
-          if (task.id === taskId) {
-            return { ...task, revisionDetail: text };
-          }
-          return task;
-        });
-        return { ...project, tasks: updatedTasks };
-      }
-      return project;
-    });
-    updateProjectsState(updatedProjects);
+  const handleSaveRevisionDetail = async (taskId, projectId, text, originalText) => {
+    if (text === originalText) {
+      return; // Tidak ada perubahan, lewati
+    }
+    setIsSavingRevision(true);
+    try {
+      await updateTaskFieldAPI(taskId, projectId, 'revisionDetail', text);
+      await refreshAllData();
+      setActiveRevisionTask(prev => prev ? { ...prev, originalRevisionDetail: text } : null);
+    } catch (err) {
+      console.error('Gagal menyimpan detail revisi:', err);
+      showNotification('Gagal menyimpan detail revisi: ' + err.message, 'error');
+    } finally {
+      setIsSavingRevision(false);
+    }
+  };
+
+  const handleCloseRevisionSidebar = async () => {
+    if (activeRevisionTask) {
+      await handleSaveRevisionDetail(
+        activeRevisionTask.id, 
+        activeRevisionTask.projectId, 
+        activeRevisionTask.revisionDetail, 
+        activeRevisionTask.originalRevisionDetail
+      );
+    }
+    setActiveRevisionTask(null);
   };
 
   const handleOpenRevision = (task) => {
     setIsModalOpen(false);
-    setActiveRevisionTask(task);
+    setActiveRevisionTask({
+      ...task,
+      originalRevisionDetail: task.revisionDetail
+    });
   };
 
   useEffect(() => {
@@ -99,136 +211,107 @@ const Dashboard = () => {
   const getUninvoicedCompletedTasks = (userId) => {
     const uninvoiced = [];
     projects.forEach(project => {
-      project.tasks.forEach(task => {
-        if (task.assignedTo === userId && task.status === 'completed' && !task.invoiceId) {
-          uninvoiced.push({
-            ...task,
-            projectName: project.name,
-            clientName: project.clientName
-          });
-        }
+      const completedTasks = project.tasks.filter(task => task.assignedTo === userId && task.status === 'completed');
+      
+      const projectInvoicesSum = invoices
+        .filter(inv => inv.projectId === project.id && inv.workerId === userId)
+        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+        
+      const previouslyInvoicedCount = Math.floor(projectInvoicesSum / 50000);
+      const pendingTasks = completedTasks.slice(previouslyInvoicedCount);
+      
+      pendingTasks.forEach(task => {
+        uninvoiced.push({
+          ...task,
+          projectName: project.name,
+          clientName: project.clientName
+        });
       });
     });
     return uninvoiced;
   };
 
-  // Buat Invoice Baru (Worker mengirim invoice)
-  const handleWorkerSubmitInvoice = () => {
-    const completedTasks = getUninvoicedCompletedTasks(currentUser.id);
-    if (completedTasks.length === 0) {
-      alert('Tidak ada tugas selesai yang perlu ditagih.');
-      return;
-    }
-
-    const totalAmount = completedTasks.length * 50000;
-    const newInvoiceId = Date.now();
-
-    // Buat invoice baru
-    const newInvoice = {
-      id: newInvoiceId,
-      projectId: completedTasks[0].projectId, // Proyek pertama
-      projectName: completedTasks[0].projectName,
-      workerId: currentUser.id,
-      workerName: currentUser.name,
-      totalAmount: totalAmount,
-      status: 'uploaded', // langsung uploaded untuk simulasi worker
-      filePath: `invoice_${currentUser.name.toLowerCase().replace(' ', '_')}_${newInvoiceId}.pdf`,
-      uploadedBy: currentUser.id,
-      uploadedAt: new Date().toISOString().split('T')[0],
-    };
-
-    // Tandai tugas-tugas sebagai sudah di-invoice
-    const updatedProjects = projects.map(project => {
-      const updatedTasks = project.tasks.map(task => {
-        if (task.assignedTo === currentUser.id && task.status === 'completed' && !task.invoiceId) {
-          return { ...task, invoiceId: newInvoiceId };
-        }
-        return task;
-      });
-      return { ...project, tasks: updatedTasks };
-    });
-
-    updateProjectsState(updatedProjects);
-    updateInvoicesState([newInvoice, ...invoices]);
-    setActiveMenu('success');
-  };
-
-  // Admin Konfirmasi Pembayaran
-  const handleAdminPayInvoice = (invoiceId) => {
-    const updatedInvoices = invoices.map(inv => {
-      if (inv.id === invoiceId) {
-        return { ...inv, status: 'paid' };
+  // Worker submit invoice via API
+  const handleWorkerSubmitInvoice = async () => {
+    try {
+      const completedTasks = getUninvoicedCompletedTasks(currentUser.id);
+      if (completedTasks.length === 0) {
+        showNotification('Tidak ada tugas selesai yang perlu ditagih.', 'warning');
+        return;
       }
-      return inv;
-    });
-    updateInvoicesState(updatedInvoices);
-    alert('Status invoice berhasil diubah menjadi PAID (Lunas)!');
-  };
 
-  // Admin Hapus Invoice
-  const handleAdminDeleteInvoice = (invoiceId) => {
-    if (window.confirm('Apakah Anda yakin ingin menghapus invoice ini?')) {
-      // Lepas flag invoiceId di tugas terkait agar bisa ditagih ulang
-      const updatedProjects = projects.map(project => {
-        const updatedTasks = project.tasks.map(task => {
-          if (task.invoiceId === invoiceId) {
-            const { invoiceId, ...rest } = task;
-            return rest;
-          }
-          return task;
-        });
-        return { ...project, tasks: updatedTasks };
-      });
-      updateProjectsState(updatedProjects);
+      // Ambil semua unique project ID yang memiliki completed tasks
+      const uniqueProjectIds = [...new Set(completedTasks.map(t => t.projectId))];
+      
+      // Loop dan buat invoice untuk masing-masing proyek
+      for (const projId of uniqueProjectIds) {
+        await createInvoiceAPI(projId, currentUser.id);
+      }
 
-      const updatedInvoices = invoices.filter(inv => inv.id !== invoiceId);
-      updateInvoicesState(updatedInvoices);
+      await refreshAllData();
+      setActiveMenu('success');
+    } catch (err) {
+      showNotification('Gagal mengirim invoice: ' + err.message, 'error');
     }
   };
 
-  // --- Feedback handlers ---
+  // Admin pay invoice via API
+  const handleAdminPayInvoice = async (invoiceId) => {
+    try {
+      await payInvoiceAPI(invoiceId);
+      await refreshAllData();
+      showNotification('Status invoice berhasil diubah menjadi PAID (Lunas)!', 'success');
+    } catch (err) {
+      showNotification('Gagal membayar invoice: ' + err.message, 'error');
+    }
+  };
+
+  // Admin delete invoice via API
+  const handleAdminDeleteInvoice = async (invoiceId) => {
+    showNotification('Apakah Anda yakin ingin menghapus invoice ini?', 'confirm', 'Konfirmasi Hapus', async () => {
+      try {
+        await deleteInvoiceAPI(invoiceId);
+        await refreshAllData();
+        showNotification('Invoice berhasil dihapus.', 'success');
+      } catch (err) {
+        showNotification('Gagal menghapus invoice: ' + err.message, 'error');
+      }
+    });
+  };
+
+  // State dan Handler untuk Feedback
   const [feedbackForm, setFeedbackForm] = useState({
     projectId: '',
     toUserId: '',
     message: ''
   });
 
-  const handleSendFeedback = (e) => {
+  const handleSendFeedback = async (e) => {
     e.preventDefault();
     if (!feedbackForm.projectId || !feedbackForm.toUserId || !feedbackForm.message) {
-      alert('Mohon lengkapi semua bidang feedback.');
+      showNotification('Mohon lengkapi semua bidang feedback.', 'warning');
       return;
     }
-
-    const selectedProj = projects.find(p => p.id === parseInt(feedbackForm.projectId));
-    const toUser = workers.find(w => w.id === parseInt(feedbackForm.toUserId)) || { id: 1, name: 'Super Admin' };
-
-    const newFeedback = {
-      id: Date.now(),
-      projectId: parseInt(feedbackForm.projectId),
-      projectName: selectedProj ? selectedProj.name : 'Unknown Project',
-      fromUserId: currentUser.id,
-      fromUserName: currentUser.name,
-      toUserId: parseInt(feedbackForm.toUserId),
-      toUserName: toUser.name,
-      message: feedbackForm.message,
-      isResolved: false,
-      createdAt: new Date().toISOString().split('T')[0]
-    };
-
-    updateFeedbacksState([newFeedback, ...feedbacks]);
-    setFeedbackForm({ projectId: '', toUserId: '', message: '' });
-    alert('Feedback/Revisi berhasil dikirim!');
+    try {
+      await createFeedbackAPI(feedbackForm.projectId, feedbackForm.toUserId, feedbackForm.message);
+      const freshFeedbacks = await getFeedbacksAPI();
+      setFeedbacks(freshFeedbacks);
+      setFeedbackForm({ projectId: '', toUserId: '', message: '' });
+      showNotification('Feedback/Revisi berhasil dikirim!', 'success');
+    } catch (err) {
+      showNotification('Gagal mengirim feedback: ' + err.message, 'error');
+    }
   };
 
-  const handleResolveFeedback = (id) => {
-    const updated = feedbacks.map(f => {
-      if (f.id === id) {
-        return { ...f, isResolved: true };
-      }
-      return f;
-    });
-    updateFeedbacksState(updated);
+  const handleResolveFeedback = async (id) => {
+    try {
+      await resolveFeedbackAPI(id);
+      const freshFeedbacks = await getFeedbacksAPI();
+      setFeedbacks(freshFeedbacks);
+      showNotification('Feedback berhasil ditandai selesai!', 'success');
+    } catch (err) {
+      showNotification('Gagal menyelesaikan feedback: ' + err.message, 'error');
+    }
   };
 
   // --- Render Views ---
@@ -450,7 +533,7 @@ const Dashboard = () => {
                       <td className="p-3 font-semibold text-gray-800">{inv.workerName}</td>
                       <td className="p-3 text-gray-600">{inv.projectName}</td>
                       <td className="p-3 text-gray-800 font-bold">Rp {inv.totalAmount.toLocaleString('id-ID')}</td>
-                      <td className="p-3 text-gray-500">{inv.uploadedAt}</td>
+                      <td className="p-3 text-gray-500">{inv.createdAt}</td>
                       <td className="p-3">
                         <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
                           inv.status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
@@ -459,7 +542,7 @@ const Dashboard = () => {
                         </span>
                       </td>
                       <td className="p-3 text-center flex justify-center gap-2">
-                        {inv.status === 'uploaded' && (
+                        {inv.status !== 'paid' && (
                           <button 
                             className="bg-[#27ae60] text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-green-600"
                             onClick={() => handleAdminPayInvoice(inv.id)}
@@ -581,9 +664,22 @@ const Dashboard = () => {
                       ) : (
                         myInvoices.map(inv => (
                           <tr key={inv.id} className="border-b">
-                            <td className="p-3 text-primary font-medium underline cursor-pointer">{inv.filePath}</td>
+                            <td className="p-3">
+                              {inv.filePath ? (
+                                <a 
+                                  href={`http://127.0.0.1:8000/storage/${inv.filePath}`} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="text-primary font-medium underline hover:text-blue-700"
+                                >
+                                  Unduh PDF
+                                </a>
+                              ) : (
+                                <span className="text-gray-400 italic">Draft (Belum ada PDF)</span>
+                              )}
+                            </td>
                             <td className="p-3 font-bold text-gray-800">Rp {inv.totalAmount.toLocaleString('id-ID')}</td>
-                            <td className="p-3 text-gray-500">{inv.uploadedAt}</td>
+                            <td className="p-3 text-gray-500">{inv.createdAt}</td>
                             <td className="p-3">
                               <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
                                 inv.status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
@@ -619,7 +715,7 @@ const Dashboard = () => {
 
     // Ambil list worker untuk tujuan feedback (jika pengirim admin)
     const selectUsersList = currentUser.role === 'admin'
-      ? [{ id: 4, name: 'Rian Kreatif' }, { id: 5, name: 'Siti Designer' }] // Worker
+      ? workers
       : [{ id: 1, name: 'Super Admin' }]; // Ke Admin jika pengirim worker
 
     return (
@@ -783,10 +879,15 @@ const Dashboard = () => {
 
           <TableList 
             projects={projects}
+            paginatedProjects={paginatedProjectsData.data}
+            currentPage={paginatedProjectsData.currentPage}
+            totalPages={paginatedProjectsData.lastPage}
+            onPageChange={handlePageChange}
             onAddProject={handleAddProject} 
             onEditProject={handleEditProject} 
             updateProjectsState={updateProjectsState}
             onOpenRevision={handleOpenRevision}
+            showNotification={showNotification}
           />
         </div>
       );
@@ -843,10 +944,15 @@ const Dashboard = () => {
 
           <TableList 
             projects={projects}
+            paginatedProjects={paginatedProjectsData.data}
+            currentPage={paginatedProjectsData.currentPage}
+            totalPages={paginatedProjectsData.lastPage}
+            onPageChange={handlePageChange}
             onAddProject={handleAddProject} 
             onEditProject={handleEditProject} 
             updateProjectsState={updateProjectsState}
             onOpenRevision={handleOpenRevision}
+            showNotification={showNotification}
           />
         </div>
       );
@@ -889,7 +995,7 @@ const Dashboard = () => {
                 </h3>
                 <button 
                   className="text-gray-400 hover:text-gray-600 border-none bg-transparent cursor-pointer text-xl"
-                  onClick={() => setActiveRevisionTask(null)}
+                  onClick={handleCloseRevisionSidebar}
                 >
                   ×
                 </button>
@@ -913,7 +1019,9 @@ const Dashboard = () => {
                     onChange={(e) => {
                       const val = e.target.value;
                       setActiveRevisionTask(prev => ({ ...prev, revisionDetail: val }));
-                      handleUpdateRevisionDetail(activeRevisionTask.id, activeRevisionTask.projectId, val);
+                    }}
+                    onBlur={(e) => {
+                      handleSaveRevisionDetail(activeRevisionTask.id, activeRevisionTask.projectId, e.target.value, activeRevisionTask.originalRevisionDetail);
                     }}
                     placeholder="Masukkan instruksi revisi secara rinci untuk worker..."
                   />
@@ -929,7 +1037,9 @@ const Dashboard = () => {
                     onChange={(e) => {
                       const val = e.target.value;
                       setActiveRevisionTask(prev => ({ ...prev, revisionDetail: val }));
-                      handleUpdateRevisionDetail(activeRevisionTask.id, activeRevisionTask.projectId, val);
+                    }}
+                    onBlur={(e) => {
+                      handleSaveRevisionDetail(activeRevisionTask.id, activeRevisionTask.projectId, e.target.value, activeRevisionTask.originalRevisionDetail);
                     }}
                     placeholder="Tanggapi atau edit detail revisi di sini..."
                   />
@@ -940,10 +1050,11 @@ const Dashboard = () => {
 
             <div className="mt-8 border-t pt-4">
               <button
-                className="w-full bg-secondary text-white border-none py-2.5 rounded-lg text-sm font-semibold cursor-pointer hover:opacity-90 transition-opacity"
-                onClick={() => setActiveRevisionTask(null)}
+                className="w-full bg-secondary text-white border-none py-2.5 rounded-lg text-sm font-semibold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50"
+                onClick={handleCloseRevisionSidebar}
+                disabled={isSavingRevision}
               >
-                Selesai & Tutup
+                {isSavingRevision ? 'Menyimpan...' : 'Selesai & Tutup'}
               </button>
             </div>
           </div>
@@ -958,9 +1069,22 @@ const Dashboard = () => {
             projects={projects}
             updateProjectsState={updateProjectsState}
             workers={workers}
+            showNotification={showNotification}
           />
         )}
       </div>
+
+      {/* CENTRAL CUSTOM NOTIFICATION MODAL */}
+      <ModalNotification
+        isOpen={notification.isOpen}
+        type={notification.type}
+        title={notification.title}
+        message={notification.message}
+        onClose={closeNotification}
+        onConfirm={notification.onConfirm}
+        confirmText={notification.confirmText}
+        cancelText={notification.cancelText}
+      />
     </div>
   );
 };

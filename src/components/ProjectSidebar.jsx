@@ -1,7 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getCurrentUser } from '../services/mockDb';
+import { 
+  getCurrentUser, 
+  createProject as createProjectAPI, 
+  updateProject as updateProjectAPI, 
+  deleteProject as deleteProjectAPI, 
+  getProjects as getProjectsAPI,
+  uploadAttachment as uploadAttachmentAPI,
+  deleteAttachment as deleteAttachmentAPI
+} from '../services/apiService';
 
-const ProjectSidebar = ({ isOpen, onClose, project, projects, updateProjectsState, workers }) => {
+const ProjectSidebar = ({ 
+  isOpen, 
+  onClose, 
+  project, 
+  projects, 
+  updateProjectsState, 
+  workers,
+  showNotification 
+}) => {
   const currentUser = getCurrentUser();
   const isReadOnly = currentUser.role !== 'admin';
   const fileInputRef = useRef(null);
@@ -56,6 +72,7 @@ const ProjectSidebar = ({ isOpen, onClose, project, projects, updateProjectsStat
             revisionDetail: mainTask.revisionDetail || '',
             assignedTo: mainTask.assignedTo || '',
           });
+          setAttachments(mainTask.attachments || []);
         } else {
           setTaskData({
             id: Date.now() + Math.random(),
@@ -68,9 +85,8 @@ const ProjectSidebar = ({ isOpen, onClose, project, projects, updateProjectsStat
             revisionDetail: '',
             assignedTo: '',
           });
+          setAttachments([]);
         }
-
-        setAttachments(project.attachments || []);
       } else {
         // Reset state for new project
         const today = new Date().toISOString().split('T')[0];
@@ -110,125 +126,107 @@ const ProjectSidebar = ({ isOpen, onClose, project, projects, updateProjectsStat
     setTaskData(prev => ({ ...prev, [name]: value }));
   };
 
-  // Attachment upload simulation
-  const handleAttachmentUpload = (e) => {
+  // Real Attachment upload using backend API & Laravel Storage
+  const handleAttachmentUpload = async (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const newAttachments = [...attachments];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      // Format file size
-      let sizeStr = '';
-      if (file.size > 1024 * 1024) {
-        sizeStr = (file.size / (1024 * 1024)).toFixed(1) + ' MB';
-      } else {
-        sizeStr = (file.size / 1024).toFixed(0) + ' KB';
+    if (!project || !taskData.id) {
+      showNotification('Silakan simpan proyek terlebih dahulu sebelum menambahkan berkas lampiran.', 'warning');
+      return;
+    }
+
+    const taskId = taskData.id;
+
+    try {
+      // Loop and upload each file
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        await uploadAttachmentAPI(taskId, file);
       }
-
-      newAttachments.push({
-        id: Date.now() + Math.random(),
-        name: file.name,
-        size: sizeStr,
-        uploadedBy: currentUser.name,
-        uploadedAt: new Date().toISOString().split('T')[0]
-      });
-    }
-
-    setAttachments(newAttachments);
-
-    // If viewing an existing project, save attachments instantly to the database
-    if (project) {
-      const updatedProjects = projects.map(p => {
-        if (p.id === project.id) {
-          return { ...p, attachments: newAttachments };
-        }
-        return p;
-      });
-      updateProjectsState(updatedProjects);
+      
+      // Fetch fresh projects
+      const freshProjects = await getProjectsAPI(null, false);
+      updateProjectsState(freshProjects);
+      
+      const updatedProj = freshProjects.find(p => p.id === project.id);
+      if (updatedProj && updatedProj.tasks && updatedProj.tasks.length > 0) {
+        setAttachments(updatedProj.tasks[0].attachments || []);
+      }
+      showNotification('Berkas lampiran berhasil diunggah!', 'success');
+    } catch (err) {
+      showNotification('Gagal mengunggah berkas: ' + err.message, 'error');
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const handleDeleteAttachment = (attachmentId) => {
-    const filtered = attachments.filter(att => att.id !== attachmentId);
-    setAttachments(filtered);
-
-    // Sync instantly if editing project
-    if (project) {
-      const updatedProjects = projects.map(p => {
-        if (p.id === project.id) {
-          return { ...p, attachments: filtered };
+  const handleDeleteAttachment = async (attachmentId) => {
+    showNotification('Apakah Anda yakin ingin menghapus lampiran ini?', 'confirm', 'Konfirmasi Hapus Lampiran', async () => {
+      try {
+        await deleteAttachmentAPI(attachmentId);
+        
+        // Fetch fresh projects
+        const freshProjects = await getProjectsAPI(null, false);
+        updateProjectsState(freshProjects);
+        
+        const updatedProj = freshProjects.find(p => p.id === project.id);
+        if (updatedProj && updatedProj.tasks && updatedProj.tasks.length > 0) {
+          setAttachments(updatedProj.tasks[0].attachments || []);
         }
-        return p;
-      });
-      updateProjectsState(updatedProjects);
-    }
+        showNotification('Berkas lampiran berhasil dihapus.', 'success');
+      } catch (err) {
+        showNotification('Gagal menghapus berkas: ' + err.message, 'error');
+      }
+    });
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (isReadOnly) return;
     if (!project) return;
-    if (window.confirm(`Apakah Anda yakin ingin menghapus proyek "${projectData.clientName || 'ini'}" beserta semua tugas di dalamnya?`)) {
-      const updatedProjects = projects.filter(p => p.id !== project.id);
-      updateProjectsState(updatedProjects);
-      alert('Proyek berhasil dihapus!');
-      onClose();
-    }
+    
+    showNotification(
+      `Apakah Anda yakin ingin menghapus proyek "${projectData.clientName || 'ini'}" beserta semua tugas di dalamnya?`,
+      'confirm',
+      'Konfirmasi Hapus Proyek',
+      async () => {
+        try {
+          await deleteProjectAPI(project.id);
+          const freshProjects = await getProjectsAPI(null, false);
+          updateProjectsState(freshProjects);
+          showNotification('Proyek berhasil dihapus!', 'success');
+          onClose();
+        } catch (err) {
+          showNotification('Gagal menghapus proyek: ' + err.message, 'error');
+        }
+      }
+    );
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (isReadOnly) return;
 
     if (!projectData.clientName) {
-      alert('Mohon isi nama brand!');
+      showNotification('Mohon isi nama brand!', 'warning');
       return;
     }
 
-    const assignedWorkerId = parseInt(taskData.assignedTo);
-    const workerList = isNaN(assignedWorkerId) ? [] : [assignedWorkerId];
+    try {
+      if (project) {
+        await updateProjectAPI(project.id, projectData, taskData);
+        showNotification('Proyek berhasil diperbarui!', 'success');
+      } else {
+        await createProjectAPI(projectData, taskData);
+        showNotification('Proyek berhasil dibuat!', 'success');
+      }
 
-    const projectId = project ? project.id : Date.now();
-
-    const savedProject = {
-      id: projectId,
-      name: projectData.clientName, // Brand Name
-      clientName: projectData.clientName, // Brand Name
-      statusChecking: projectData.statusChecking,
-      startDate: projectData.startDate,
-      endDate: projectData.endDate,
-      referenceLink: projectData.referenceLink,
-      workers: workerList,
-      attachments: attachments,
-      tasks: [
-        {
-          id: taskData.id || (Date.now() + 1),
-          projectId: projectId,
-          title: projectData.clientName, // Match Brand Name
-          category: taskData.category,
-          status: taskData.status,
-          priority: taskData.priority,
-          deadline: projectData.endDate,
-          description: taskData.description,
-          assignedTo: isNaN(assignedWorkerId) ? '' : assignedWorkerId,
-          progressPercentage: taskData.progressPercentage,
-          statusChecking: project ? (project.tasks[0]?.statusChecking || '') : '',
-          revisionDetail: taskData.revisionDetail,
-        }
-      ]
-    };
-
-    let updatedProjects;
-    if (project) {
-      updatedProjects = projects.map(p => p.id === project.id ? savedProject : p);
-      alert('Proyek berhasil diperbarui!');
-    } else {
-      updatedProjects = [savedProject, ...projects];
-      alert('Proyek berhasil dibuat!');
+      const freshProjects = await getProjectsAPI(null, false);
+      updateProjectsState(freshProjects);
+      onClose();
+    } catch (err) {
+      showNotification('Gagal menyimpan proyek: ' + err.message, 'error');
     }
-
-    updateProjectsState(updatedProjects);
-    onClose();
   };
 
   if (!isOpen) return null;
@@ -419,7 +417,7 @@ const ProjectSidebar = ({ isOpen, onClose, project, projects, updateProjectsStat
                         <button
                           type="button"
                           className="bg-transparent border-none text-blue-500 hover:text-blue-700 cursor-pointer text-xs font-bold"
-                          onClick={() => alert(`Simulasi download file: ${att.name}`)}
+                          onClick={() => window.open(att.fileUrl, '_blank')}
                         >
                           Unduh
                         </button>

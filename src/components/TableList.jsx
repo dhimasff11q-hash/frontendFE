@@ -1,39 +1,57 @@
 import React, { useState, useEffect } from 'react';
-import { getCurrentUser, getUsers } from '../services/mockDb';
+import { 
+  getCurrentUser, 
+  updateTaskField as updateTaskFieldAPI, 
+  getProjects as getProjectsAPI, 
+  deleteProject as deleteProjectAPI 
+} from '../services/apiService';
 
-const TableList = ({ projects, onAddProject, onEditProject, updateProjectsState, onOpenRevision }) => {
+const TableList = ({ 
+  projects, 
+  paginatedProjects, 
+  currentPage, 
+  totalPages, 
+  onPageChange, 
+  onAddProject, 
+  onEditProject, 
+  updateProjectsState, 
+  onOpenRevision, 
+  showNotification 
+}) => {
   const currentUser = getCurrentUser();
-  const allUsers = getUsers();
   
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [editingTasks, setEditingTasks] = useState({});
 
-  const getProgressStyle = (task) => {
-    if (task.status === 'not_started') {
+  const getProgressStyle = (task, editState) => {
+    const statusChecking = editState ? editState.statusChecking : task.statusChecking;
+    const status = editState ? editState.status : task.status;
+
+    if (statusChecking === 'Revisi') {
+      return {
+        bgClass: 'bg-[#e74c3c] text-white font-bold',
+        text: 'Revision'
+      };
+    }
+    if (status === 'not_started') {
       return {
         bgClass: 'bg-gray-500 text-white font-bold',
         text: 'Not Started'
       };
     }
-    if (task.status === 'in_progress') {
+    if (status === 'in_progress') {
       return {
         bgClass: 'bg-[#f1c40f] text-gray-900 font-bold',
         text: 'On Progress'
       };
     }
-    if (task.status === 'completed' || task.statusChecking === 'ACC') {
+    if (status === 'completed' || statusChecking === 'ACC') {
       return {
         bgClass: 'bg-[#27ae60] text-white font-bold',
         text: 'Resolved'
       };
     }
-    if (task.status === 'resolved') {
-      if (task.statusChecking === 'Revisi') {
-        return {
-          bgClass: 'bg-[#e74c3c] text-white font-bold',
-          text: 'Resolved'
-        };
-      }
+    if (status === 'resolved') {
       return {
         bgClass: 'bg-[#f1c40f] text-gray-900 font-bold',
         text: 'Resolved'
@@ -49,13 +67,23 @@ const TableList = ({ projects, onAddProject, onEditProject, updateProjectsState,
   const selectedProj = projects.find(p => p.id === parseInt(selectedProjectId));
 
   // Fungsi hapus proyek dari bagian kontrol luar tabel
-  const handleDeleteProject = (projId) => {
-    if (window.confirm('Apakah Anda yakin ingin menghapus proyek ini? Tindakan ini akan menghapus proyek dan semua tugas di dalamnya.')) {
-      const updated = projects.filter(p => p.id !== projId);
-      updateProjectsState(updated);
-      setSelectedProjectId('');
-      alert('Proyek berhasil dihapus!');
-    }
+  const handleDeleteProject = async (projId) => {
+    showNotification(
+      'Apakah Anda yakin ingin menghapus proyek ini? Tindakan ini akan menghapus proyek dan semua tugas di dalamnya.',
+      'confirm',
+      'Konfirmasi Hapus Proyek',
+      async () => {
+        try {
+          await deleteProjectAPI(projId);
+          const freshProjects = await getProjectsAPI(null, false);
+          updateProjectsState(freshProjects);
+          setSelectedProjectId('');
+          showNotification('Proyek berhasil dihapus!', 'success');
+        } catch (err) {
+          showNotification('Gagal menghapus proyek: ' + err.message, 'error');
+        }
+      }
+    );
   };
 
   // Cek apakah tanggal deadline terlewati (overdue) dan tugas belum selesai
@@ -68,24 +96,24 @@ const TableList = ({ projects, onAddProject, onEditProject, updateProjectsState,
     return deadline < today;
   };
 
-  // Ambil list tugas secara dinamis berdasarkan data proyek
+  // Ambil list tugas secara dinamis berdasarkan data proyek terpaginasi dari Backend
   const getTasksList = () => {
     const tasksList = [];
-    projects.forEach(project => {
+    const displayProjects = paginatedProjects || [];
+
+    displayProjects.forEach(project => {
       project.tasks.forEach(task => {
-        // Filter jika worker (hanya tugas miliknya)
         if (currentUser.role === 'worker' && task.assignedTo !== currentUser.id) {
           return;
         }
 
-        const assignee = allUsers.find(u => u.id === task.assignedTo);
         tasksList.push({
           ...task,
           projectName: project.name,
           clientName: project.clientName,
           statusChecking: task.statusChecking || '',
           revisionDetail: task.revisionDetail || '',
-          assigneeName: assignee ? assignee.name : 'Belum Ditugaskan',
+          assigneeName: task.assigneeName || 'Belum Ditugaskan',
           projectObj: project
         });
       });
@@ -117,7 +145,7 @@ const TableList = ({ projects, onAddProject, onEditProject, updateProjectsState,
         setSelectedProjectId('');
       }
     }
-  }, [projects, selectedProjectId]);
+  }, [paginatedProjects, selectedProjectId]);
 
   const handleInputChange = (taskId, field, value) => {
     setEditingTasks(prev => ({
@@ -130,46 +158,14 @@ const TableList = ({ projects, onAddProject, onEditProject, updateProjectsState,
   };
 
   // Simpan otomatis ke master state (Auto-save)
-  const handleAutoSave = (taskId, projectId, field, value) => {
-    let updates = { [field]: value };
-
-    if (field === 'status') {
-      if (value === 'not_started') {
-        updates.progressPercentage = 0;
-        updates.statusChecking = '';
-      } else if (value === 'in_progress') {
-        updates.progressPercentage = 50;
-        updates.statusChecking = '';
-      } else if (value === 'resolved') {
-        updates.progressPercentage = 100;
-        updates.statusChecking = ''; // Clear previous statusChecking so it goes back to yellow (pending check)
-      }
+  const handleAutoSave = async (taskId, projectId, field, value) => {
+    try {
+      await updateTaskFieldAPI(taskId, projectId, field, value);
+      const freshProjects = await getProjectsAPI(null, false);
+      updateProjectsState(freshProjects);
+    } catch (err) {
+      showNotification('Gagal menyimpan perubahan ke server: ' + err.message, 'error');
     }
-
-    if (field === 'statusChecking') {
-      if (value === 'ACC') {
-        updates.status = 'completed';
-        updates.progressPercentage = 100;
-      } else if (value === 'Revisi') {
-        updates.status = 'resolved'; // keep as resolved so we show red resolved
-        updates.progressPercentage = 50; // set back to 50 for revision
-      }
-    }
-
-    const updatedProjects = projects.map(project => {
-      if (project.id === projectId) {
-        const updatedTasks = project.tasks.map(task => {
-          if (task.id === taskId) {
-            return { ...task, ...updates };
-          }
-          return task;
-        });
-        return { ...project, tasks: updatedTasks };
-      }
-      return project;
-    });
-
-    updateProjectsState(updatedProjects);
   };
 
   // Menentukan class warna border-l dan background baris tugas
@@ -355,14 +351,18 @@ const TableList = ({ projects, onAddProject, onEditProject, updateProjectsState,
                     {/* 6. Progress (Dropdown / Badge) */}
                     <td className="p-[15px] text-white min-w-[150px]">
                       {currentUser.role === 'worker' ? (
-                        task.status === 'completed' ? (
+                        (task.status === 'completed' && task.statusChecking !== 'Revisi') ? (
                           <span className="px-3 py-1.5 rounded text-xs font-bold bg-[#27ae60] text-white flex items-center justify-center gap-1 w-fit shadow-sm">
                             ✔ Resolved
                           </span>
                         ) : (
                           <select
-                            className={`p-2 rounded text-xs font-bold outline-none border-none cursor-pointer transition-all duration-300 shadow-sm w-fit ${getProgressStyle(task).bgClass}`}
-                            value={editState.status || task.status}
+                            className={`p-2 rounded text-xs font-bold outline-none border-none cursor-pointer transition-all duration-300 shadow-sm w-fit ${getProgressStyle(task, editState).bgClass}`}
+                            value={
+                              (editState.status || task.status) === 'completed'
+                                ? 'resolved'
+                                : (editState.status || task.status)
+                            }
                             onChange={(e) => {
                               const val = e.target.value;
                               handleInputChange(task.id, 'status', val);
@@ -375,10 +375,10 @@ const TableList = ({ projects, onAddProject, onEditProject, updateProjectsState,
                           </select>
                         )
                       ) : (
-                        <span className={`px-3 py-1.5 rounded text-xs font-bold flex items-center justify-center gap-1 w-fit shadow-sm ${getProgressStyle(task).bgClass}`}>
-                          {getProgressStyle(task).text === 'Resolved' && (task.status === 'completed' || task.statusChecking === 'ACC') && '✔ '}
-                          {getProgressStyle(task).text === 'Resolved' && task.statusChecking === 'Revisi' && '✘ '}
-                          {getProgressStyle(task).text}
+                        <span className={`px-3 py-1.5 rounded text-xs font-bold flex items-center justify-center gap-1 w-fit shadow-sm ${getProgressStyle(task, editState).bgClass}`}>
+                          {getProgressStyle(task, editState).text === 'Resolved' && (task.status === 'completed' || task.statusChecking === 'ACC') && '✔ '}
+                          {getProgressStyle(task, editState).text === 'Resolved' && task.statusChecking === 'Revisi' && '✘ '}
+                          {getProgressStyle(task, editState).text}
                         </span>
                       )}
                     </td>
@@ -464,6 +464,41 @@ const TableList = ({ projects, onAddProject, onEditProject, updateProjectsState,
           </tbody>
         </table>
       </div>
+      
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex justify-center items-center gap-2 mt-6">
+          <button
+            onClick={() => onPageChange(currentPage - 1)}
+            disabled={currentPage === 1}
+            className="px-4 py-2 bg-primary text-white font-bold rounded-lg text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+          >
+            Kembali
+          </button>
+          
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+            <button
+              key={page}
+              onClick={() => onPageChange(page)}
+              className={`px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+                currentPage === page 
+                  ? 'bg-white text-primary border border-primary shadow-sm' 
+                  : 'bg-primary text-white hover:opacity-90'
+              }`}
+            >
+              {page}
+            </button>
+          ))}
+          
+          <button
+            onClick={() => onPageChange(currentPage + 1)}
+            disabled={currentPage === totalPages}
+            className="px-4 py-2 bg-primary text-white font-bold rounded-lg text-xs disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+          >
+            Lanjut
+          </button>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import ModalNotification from '../components/ModalNotification';
 import { 
   getCurrentUser, 
-  getProjects, 
-  saveProjects, 
-  getInvoices, 
-  saveInvoices 
-} from '../services/mockDb';
+  getProjects as getProjectsAPI, 
+  getInvoices as getInvoicesAPI, 
+  createInvoice as createInvoiceAPI 
+} from '../services/apiService';
 
 const Payment = () => {
   const navigate = useNavigate();
@@ -16,23 +16,64 @@ const Payment = () => {
   const [projects, setProjects] = useState([]);
   const [invoices, setInvoices] = useState([]);
 
+  // Modal Notification state
+  const [notification, setNotification] = useState({
+    isOpen: false,
+    type: 'success',
+    title: '',
+    message: '',
+    onConfirm: null
+  });
+
+  const showNotification = (message, type = 'success', title = '', onConfirm = null) => {
+    setNotification({
+      isOpen: true,
+      type,
+      title: title || (type === 'success' ? 'Berhasil' : type === 'error' ? 'Gagal' : 'Konfirmasi'),
+      message,
+      onConfirm
+    });
+  };
+
+  const closeNotification = () => {
+    setNotification(prev => ({ ...prev, isOpen: false }));
+  };
+
   useEffect(() => {
-    setProjects(getProjects());
-    setInvoices(getInvoices());
+    const loadPaymentData = async () => {
+      try {
+        const [projData, invData] = await Promise.all([
+          getProjectsAPI(),
+          getInvoicesAPI()
+        ]);
+        setProjects(projData);
+        setInvoices(invData);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    loadPaymentData();
   }, []);
 
   // Ambil tugas yang statusnya 'completed' dan belum di-invoice untuk user saat ini
   const getUninvoicedCompletedTasks = () => {
     const uninvoiced = [];
     projects.forEach(project => {
-      project.tasks.forEach(task => {
-        if (task.assignedTo === currentUser?.id && task.status === 'completed' && !task.invoiceId) {
-          uninvoiced.push({
-            ...task,
-            projectName: project.name,
-            clientName: project.clientName
-          });
-        }
+      const completedTasks = project.tasks.filter(task => task.assignedTo === currentUser?.id && task.status === 'completed');
+      
+      const projectInvoicesSum = invoices
+        .filter(inv => inv.projectId === project.id && inv.workerId === currentUser?.id)
+        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+        
+      const previouslyInvoicedCount = Math.floor(projectInvoicesSum / 50000);
+      const pendingTasks = completedTasks.slice(previouslyInvoicedCount);
+      
+      pendingTasks.forEach(task => {
+        uninvoiced.push({
+          ...task,
+          projectName: project.name,
+          clientName: project.clientName
+        });
       });
     });
     return uninvoiced;
@@ -43,49 +84,31 @@ const Payment = () => {
 
   const handlePay = () => {
     if (tasksToInvoice.length === 0) {
-      alert('Tidak ada tugas selesai yang perlu diklaim pembayaran.');
+      showNotification('Tidak ada tugas selesai yang perlu diklaim pembayaran.', 'warning');
       return;
     }
     setView('upload');
   };
 
-  const handleUpload = () => {
-    const totalAmount = tasksToInvoice.length * 50000;
-    const newInvoiceId = Date.now();
-
-    // Buat invoice baru
-    const newInvoice = {
-      id: newInvoiceId,
-      projectId: tasksToInvoice[0].projectId,
-      projectName: tasksToInvoice[0].projectName,
-      workerId: currentUser.id,
-      workerName: currentUser.name,
-      totalAmount: totalAmount,
-      status: 'uploaded',
-      filePath: `invoice_${currentUser.name.toLowerCase().replace(' ', '_')}_${newInvoiceId}.pdf`,
-      uploadedBy: currentUser.id,
-      uploadedAt: new Date().toISOString().split('T')[0],
-    };
-
-    // Tandai tugas-tugas sebagai sudah di-invoice
-    const updatedProjects = projects.map(project => {
-      const updatedTasks = project.tasks.map(task => {
-        if (task.assignedTo === currentUser.id && task.status === 'completed' && !task.invoiceId) {
-          return { ...task, invoiceId: newInvoiceId };
+  const handleUpload = async () => {
+    try {
+      if (tasksToInvoice.length > 0) {
+        const uniqueProjectIds = [...new Set(tasksToInvoice.map(t => t.projectId))];
+        for (const projId of uniqueProjectIds) {
+          await createInvoiceAPI(projId, currentUser.id);
         }
-        return task;
-      });
-      return { ...project, tasks: updatedTasks };
-    });
-
-    // Simpan ke localStorage & state
-    localStorage.setItem('sif_projects', JSON.stringify(updatedProjects));
-    const updatedInvoices = [newInvoice, ...invoices];
-    localStorage.setItem('sif_invoices', JSON.stringify(updatedInvoices));
-
-    setProjects(updatedProjects);
-    setInvoices(updatedInvoices);
-    setView('success');
+        
+        const [freshProjects, freshInvoices] = await Promise.all([
+          getProjectsAPI(),
+          getInvoicesAPI()
+        ]);
+        setProjects(freshProjects);
+        setInvoices(freshInvoices);
+        setView('success');
+      }
+    } catch (err) {
+      showNotification('Gagal mengupload invoice: ' + err.message, 'error');
+    }
   };
 
   const renderContent = () => {
@@ -167,7 +190,7 @@ const Payment = () => {
             <br />
             <button
               className="p-[15px_30px] text-[1.1rem] font-bold border-none rounded-[5px] cursor-pointer mt-5 transition-[background-color] duration-300 bg-darkPaymentBlue text-white underline w-[300px] hover:bg-opacity-90"
-              onClick={() => alert('Worker sudah dibayar')}
+              onClick={() => showNotification('Worker sudah dibayar', 'success')}
             >
               WORKER SUDAH DIBAYAR
             </button>
@@ -220,6 +243,16 @@ const Payment = () => {
       </div>
 
       <div className="flex-1 p-2.5 flex flex-col items-center">{renderContent()}</div>
+
+      {/* CENTRAL CUSTOM NOTIFICATION MODAL */}
+      <ModalNotification
+        isOpen={notification.isOpen}
+        type={notification.type}
+        title={notification.title}
+        message={notification.message}
+        onClose={closeNotification}
+        onConfirm={notification.onConfirm}
+      />
     </div>
   );
 };

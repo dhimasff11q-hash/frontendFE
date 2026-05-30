@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getUsers, setCurrentUser } from '../services/mockDb';
+import { login } from '../services/apiService';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -9,6 +9,7 @@ const Login = () => {
     password: ''
   });
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleChange = (e) => {
     setFormData({
@@ -18,22 +19,18 @@ const Login = () => {
     setError('');
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const users = getUsers();
-    const matchedUser = users.find(
-      (u) => u.email.toLowerCase() === formData.email.toLowerCase() && u.password === formData.password
-    );
+    setError('');
+    setIsLoading(true);
 
-    if (matchedUser) {
-      if (!matchedUser.isActive) {
-        setError('Akun Anda telah dinonaktifkan. Silakan hubungi admin.');
-        return;
-      }
-      setCurrentUser(matchedUser);
+    try {
+      await login(formData.email, formData.password);
       navigate('/dashboard');
-    } else {
-      setError('Email atau password salah!');
+    } catch (err) {
+      setError(err.message || 'Email atau password salah!');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -43,7 +40,7 @@ const Login = () => {
         <div className="bg-primary rounded-[10px] p-5 mb-[25px] text-center">
           <h1 className="text-white text-[32px] font-bold m-0">SIF Creative.</h1>
         </div>
-        
+
         <h2 className="text-2xl text-secondary text-center mb-[25px] font-bold">LOGIN</h2>
 
         {error && (
@@ -51,7 +48,7 @@ const Login = () => {
             {error}
           </div>
         )}
-        
+
         <form onSubmit={handleSubmit} className="flex flex-col gap-5">
           <div className="flex flex-col gap-2">
             <label className="text-sm text-secondary font-semibold uppercase">Email</label>
@@ -78,15 +75,15 @@ const Login = () => {
             />
           </div>
 
-          <button type="submit" className="bg-primary text-white border-none p-3 rounded-lg text-base font-bold cursor-pointer mt-2.5 hover:opacity-90 transition-opacity">
-            LOGIN
+          <button type="submit" disabled={isLoading} className="bg-primary text-white border-none p-3 rounded-lg text-base font-bold cursor-pointer mt-2.5 hover:opacity-90 transition-opacity disabled:opacity-50">
+            {isLoading ? 'LOADING...' : 'LOGIN'}
           </button>
         </form>
 
         <p className="text-center mt-5 text-xs text-secondary uppercase">
           IF YOU DON'T HAVE AN ACCOUNT?{' '}
-          <span 
-            className="text-primary font-bold cursor-pointer underline" 
+          <span
+            className="text-primary font-bold cursor-pointer underline"
             onClick={() => navigate('/register')}
           >
             REGISTER

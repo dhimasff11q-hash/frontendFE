@@ -5,7 +5,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Payment from './pages/Payment';
-import { getCurrentUser } from './services/mockDb';
+import { getCurrentUser } from './services/apiService';
 
 // Wrapper untuk memproteksi rute privat (wajib login)
 const ProtectedRoute = ({ children }) => {

@@ -1,14 +1,19 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getCurrentUser, logout } from '../services/mockDb';
+import { getCurrentUser, logout as logoutAPI } from '../services/apiService';
 
 const Navbar = ({ toggleSidebar }) => {
   const navigate = useNavigate();
   const user = getCurrentUser();
 
-  const handleLogout = () => {
-    logout();
-    navigate('/');
+  const handleLogout = async () => {
+    try {
+      await logoutAPI();
+      navigate('/');
+    } catch (err) {
+      console.error('Logout failed:', err);
+      navigate('/');
+    }
   };
 
   // Ambil inisial nama (maksimal 3 huruf)
